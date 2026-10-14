@@ -36,7 +36,11 @@ interface DueRow { id: string; name: string; paid: number; owed: number; remaini
       </div>
 
       <section class="card">
-        <h2>Paid vs remaining by investor <span class="muted">· as of {{ dues.value()?.as_of }}</span></h2>
+        <div class="toolbar">
+          <h2>Paid vs remaining by investor <span class="muted">· as of {{ dues.value()?.as_of }}</span></h2>
+          <button type="button" [class.is-loading]="reportBusy()" [disabled]="reportBusy() || !rows().length" (click)="openReport()">{{ reportBusy() ? 'Preparing PDF…' : 'PDF report' }}</button>
+        </div>
+        @if (reportError()) { <p class="error" role="alert">{{ reportError() }}</p> }
         @if (rows().length) {
           <div class="canvas-box" style="height:360px"><canvas #dueCanvas role="img" aria-label="Paid and remaining amount for each investor"></canvas></div>
           <div class="table-wrap">
@@ -142,6 +146,114 @@ export class Dashboard {
       type: r.types.map((t) => t.name).sort((a, b) => a.localeCompare(b)).join(', ') || '—',
     })),
   );
+
+  protected readonly reportBusy = signal(false);
+  protected readonly reportError = signal('');
+
+  /** Builds the PDF in the browser (nothing is saved or uploaded) and opens it in a new tab. */
+  async openReport() {
+    // Open the tab synchronously inside the click so pop-up blockers allow it, then point it at the PDF.
+    const tab = window.open('', '_blank');
+    if (!tab) { this.reportError.set('Your browser blocked the new tab. Allow pop-ups for this site and try again.'); return; }
+    tab.opener = null;
+    tab.document.write('<title>Generating report…</title><p style="font:16px system-ui;padding:2rem">Generating report…</p>');
+    this.reportError.set('');
+    this.reportBusy.set(true);
+    try {
+      tab.location.href = await this.buildReport();
+    } catch {
+      tab.close();
+      this.reportError.set('Could not create the PDF report.');
+    } finally {
+      this.reportBusy.set(false);
+    }
+  }
+
+  private async buildReport(): Promise<string> {
+    // Loaded on demand so the PDF libraries stay out of the main bundle.
+    const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+    const rows = this.tableRows();
+    const scope = this.tab() ? this.summary().scope : 'All types';
+    const asOf = this.dues.value()?.as_of ?? '';
+    const money = (n: number) => 'PKR ' + new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n);
+    const status = (r: { remaining: number; ahead: number; owed: number }) =>
+      r.remaining > 0 ? 'Behind' : r.ahead > 0 ? `Ahead ${money(r.ahead)}` : r.owed > 0 ? 'Settled' : 'No request';
+
+    const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+    const margin = 14;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const width = pageWidth - margin * 2;
+
+    doc.setFont('helvetica', 'bold').setFontSize(16).text('Lodhi Farms Investment', margin, 18);
+    doc.setFont('helvetica', 'normal').setFontSize(12).text('Paid vs remaining by investor', margin, 25);
+    doc.setFontSize(9).setTextColor(100).text(`Type: ${scope}   |   As of: ${asOf}   |   Generated: ${new Date().toLocaleDateString('en-GB')}`, margin, 31);
+    doc.setTextColor(0);
+
+    const chartHeight = (width * 440) / 1000;
+    doc.addImage(this.chartImage(this.rows()), 'JPEG', margin, 35, width, chartHeight);
+
+    const sum = (k: 'paid' | 'owed' | 'remaining') => rows.reduce((a, r) => a + r[k], 0);
+    autoTable(doc, {
+      startY: 35 + chartHeight + 6,
+      margin: { left: margin, right: margin, bottom: 14 },
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [47, 107, 58] },
+      footStyles: { fillColor: [235, 235, 235], textColor: 20, fontStyle: 'bold' },
+      columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+      head: [['Investor', 'Type', 'Paid', 'Owed', 'Remaining', 'Status']],
+      body: rows.map((r) => [r.name, r.type === '—' ? '-' : r.type, money(r.paid), money(r.owed), money(r.remaining), status(r)]),
+      foot: [['Total', '', money(sum('paid')), money(sum('owed')), money(sum('remaining')), '']],
+      didParseCell: (d) => {
+        if (d.section !== 'body' || d.column.index !== 5) return;
+        const text = String(d.cell.raw);
+        if (text === 'Behind') d.cell.styles.textColor = [179, 38, 30];
+        else if (text === 'Settled' || text.startsWith('Ahead')) d.cell.styles.textColor = [47, 107, 58];
+      },
+    });
+
+    const pages = doc.getNumberOfPages();
+    for (let i = 1; i <= pages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8).setTextColor(120).text(`Page ${i} of ${pages}`, pageWidth - margin, pageHeight - 8, { align: 'right' });
+    }
+    doc.setProperties({ title: `Paid vs remaining by investor - ${scope} - ${asOf}` });
+    return String(doc.output('bloburl'));
+  }
+
+  /** Renders the chart for print (dark text on white) so it stays readable when the app is in dark mode. */
+  private chartImage(rows: DueRow[]): string {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1000;
+    canvas.height = 440;
+    const ink = '#222222';
+    const chart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: rows.map((r) => r.name),
+        datasets: [
+          { label: 'Paid', data: rows.map((r) => r.paid), backgroundColor: PAID },
+          { label: 'Remaining', data: rows.map((r) => r.remaining), backgroundColor: REMAINING },
+        ],
+      },
+      options: {
+        responsive: false, animation: false, devicePixelRatio: 2,
+        scales: {
+          x: { stacked: true, ticks: { color: ink }, grid: { display: false } },
+          y: { stacked: true, beginAtZero: true, ticks: { color: ink }, grid: { color: '#dddddd' } },
+        },
+        plugins: { legend: { labels: { color: ink } } },
+      },
+      plugins: [{
+        id: 'whiteBackground',
+        beforeDraw: (c) => { c.ctx.save(); c.ctx.globalCompositeOperation = 'destination-over'; c.ctx.fillStyle = '#ffffff'; c.ctx.fillRect(0, 0, c.width, c.height); c.ctx.restore(); },
+      }],
+    });
+    const image = canvas.toDataURL('image/jpeg', 0.92); // the plugin paints a white background, so JPEG is safe and far smaller
+    chart.destroy();
+    return image;
+  }
 
   protected height() { return Math.max(160, this.typesView().length * 70 + 70); }
 
