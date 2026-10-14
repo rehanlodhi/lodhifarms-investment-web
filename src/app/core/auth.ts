@@ -1,7 +1,7 @@
 import { HttpClient, HttpInterceptorFn } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
-import { tap } from 'rxjs';
+import { catchError, tap, throwError } from 'rxjs';
 
 const KEY = 'token';
 
@@ -30,7 +30,13 @@ export class Auth {
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(Auth);
   const token = auth.token();
-  return next(token && req.url.startsWith('/api') ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } }) : req);
+  const authed = token && req.url.startsWith('/api') && !req.url.endsWith('/auth/login');
+  return next(authed ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } }) : req).pipe(
+    catchError((e) => {
+      if (authed && e.status === 401) auth.logout();
+      return throwError(() => e);
+    }),
+  );
 };
 
 export const authGuard: CanActivateFn = () => {
