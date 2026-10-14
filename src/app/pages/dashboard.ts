@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { rxResource } from '@angular/core/rxjs-interop';
+import { firstValueFrom } from 'rxjs';
 import { CurrencyPipe, NgTemplateOutlet } from '@angular/common';
 import { Chart, registerables } from 'chart.js';
 import { Api } from '../core/api';
@@ -10,6 +11,15 @@ Chart.register(...registerables);
 const PALETTE = ['#2f6b3a', '#d9a441', '#3b7dd8', '#b5533c', '#7a5cc2', '#2a9d8f', '#c0568f', '#8a8f3a'];
 const PAID = '#2f6b3a';
 const REMAINING = '#d9a441';
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+type RGB = [number, number, number];
+type PdfCell = string | { content: string; styles: { textColor?: RGB; fontStyle?: 'bold' | 'normal' } };
+
+interface MonthCell { due: number; got: number }
+interface InvestorMatrix { name: string; types: { name: string; cells: MonthCell[] }[] }
+interface MonthMatrix { months: number[]; investors: InvestorMatrix[] }
 
 interface DueRow { id: string; name: string; paid: number; owed: number; remaining: number; ahead: number; types: TypeDues[] }
 
@@ -173,6 +183,7 @@ export class Dashboard {
     // Loaded on demand so the PDF libraries stay out of the main bundle.
     const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
     const rows = this.tableRows();
+    const matrix = await this.monthMatrix();
     const scope = this.tab() ? this.summary().scope : 'All types';
     const asOf = this.dues.value()?.as_of ?? '';
     const money = (n: number) => 'PKR ' + new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n);
@@ -213,13 +224,126 @@ export class Dashboard {
       },
     });
 
+    // Second section: one table per investor, types as rows and months as columns.
+    const label = (i: number) => `${MONTH_NAMES[i % 12]} ${Math.floor(i / 12)}`;
+    const num = (n: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n);
+    const GREEN: RGB = [47, 107, 58], RED: RGB = [179, 38, 30], GREY: RGB = [110, 110, 110];
+    // Paid in full = green, short = red with the amount still missing (-), paid in a month with no request = grey.
+    const cell = (c: MonthCell): PdfCell => {
+      if (!c.due && !c.got) return { content: '-', styles: { textColor: GREY } };
+      if (!c.due) return { content: num(c.got), styles: { textColor: GREY } };
+      if (c.got >= c.due) return { content: num(c.got), styles: { textColor: GREEN } };
+      return { content: `-${num(c.due - c.got)}`, styles: { textColor: RED, fontStyle: 'bold' } };
+    };
+
+    doc.addPage();
+    let y = 20;
+    doc.setFont('helvetica', 'bold').setFontSize(12).setTextColor(0).text('Investors with missing amounts, by month', margin, y);
+    doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(100)
+      .text('Green = amount paid that month. Red with a minus (-) = amount still missing that month. Grey = paid with no request that month.', margin, y + 5);
+    y += 13;
+    if (!matrix.investors.length) {
+      doc.setFontSize(10).setTextColor(47, 107, 58).text('No missing amounts. Everyone is up to date.', margin, y);
+    }
+    for (const investor of matrix.investors) {
+      const bodyRows = investor.types.length * 7 + (investor.types.length > 1 ? 7 : 0);
+      if (y + 6 + 8 + bodyRows > pageHeight - 14) { doc.addPage(); y = 20; }
+      doc.setFont('helvetica', 'bold').setFontSize(10).setTextColor(0).text(investor.name, margin, y);
+
+      const totalCells = matrix.months.map((_, i) => ({
+        due: investor.types.reduce((a, t) => a + t.cells[i].due, 0),
+        got: investor.types.reduce((a, t) => a + t.cells[i].got, 0),
+      }));
+      const typeTotal = (cells: MonthCell[]): PdfCell => {
+        const due = cells.reduce((a, c) => a + c.due, 0), got = cells.reduce((a, c) => a + c.got, 0);
+        return { content: `${num(got)} / ${num(due)}`, styles: { fontStyle: 'bold', textColor: got < due ? RED : GREEN } };
+      };
+      const body: PdfCell[][] = investor.types.map((t) => [t.name, ...t.cells.map(cell), typeTotal(t.cells)]);
+      if (investor.types.length > 1) {
+        body.push([
+          { content: 'Total', styles: { fontStyle: 'bold' } },
+          ...totalCells.map(cell),
+          typeTotal(totalCells),
+        ]);
+      }
+      const monthWidth = (width - 30 - 32) / matrix.months.length;
+      const monthColumns = monthWidth >= 18 ? Object.fromEntries(matrix.months.map((_, i) => [i + 1, { cellWidth: monthWidth }])) : {};
+      autoTable(doc, {
+        startY: y + 2,
+        margin: { left: margin, right: margin, bottom: 14 },
+        theme: 'grid',
+        styles: { fontSize: 8, cellPadding: 1.8, halign: 'right' },
+        headStyles: { fillColor: [47, 107, 58], halign: 'right' },
+        columnStyles: { 0: { halign: 'left', cellWidth: 30 }, ...monthColumns, [matrix.months.length + 1]: { cellWidth: 32 } },
+        horizontalPageBreak: true,
+        horizontalPageBreakRepeat: 0,
+        head: [['Type', ...matrix.months.map(label), 'Paid / requested']],
+        body,
+        didParseCell: (d) => {
+          if (d.section === 'head' && d.column.index === 0) d.cell.styles.halign = 'left';
+          if (d.section === 'body' && investor.types.length > 1 && d.row.index === body.length - 1) d.cell.styles.fillColor = [235, 235, 235];
+        },
+      });
+      y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 9;
+    }
+
     const pages = doc.getNumberOfPages();
     for (let i = 1; i <= pages; i++) {
       doc.setPage(i);
-      doc.setFontSize(8).setTextColor(120).text(`Page ${i} of ${pages}`, pageWidth - margin, pageHeight - 8, { align: 'right' });
+      doc.setFont('helvetica', 'normal').setFontSize(8).setTextColor(120).text(`Page ${i} of ${pages}`, pageWidth - margin, pageHeight - 8, { align: 'right' });
     }
     doc.setProperties({ title: `Paid vs remaining by investor - ${scope} - ${asOf}` });
     return String(doc.output('bloburl'));
+  }
+
+  /**
+   * Per investor and type, what was requested and what was paid in each month (up to the as-of month).
+   * Same investor order and type filter as the dashboard table; only investors with a missing amount are included.
+   */
+  private async monthMatrix(): Promise<MonthMatrix> {
+    const dues = this.dues.value();
+    if (!dues) return { months: [], investors: [] };
+    const [requests, investments] = await Promise.all([firstValueFrom(this.api.requests()), firstValueFrom(this.api.investments())]);
+    const tab = this.tab();
+    const index = (month: string) => { const [y, m] = month.split('-').map(Number); return y * 12 + m - 1; };
+    const last = index(dues.as_of);
+
+    const due = new Map<string, number>();   // key: investor|type|month index
+    const got = new Map<string, number>();
+    const add = (map: Map<string, number>, key: string, n: number) => map.set(key, (map.get(key) ?? 0) + n);
+    for (const r of requests) {
+      if (tab && r.type_id !== tab) continue;
+      const start = index(r.start_month);
+      const end = r.recurring ? Math.min(r.end_month ? index(r.end_month) : last, last) : start;
+      for (let m = start; m <= end && m <= last; m++) for (const investor of r.investor_ids) add(due, `${investor}|${r.type_id}|${m}`, r.amount);
+    }
+    for (const i of investments) {
+      if (tab && i.type_id !== tab) continue;
+      add(got, `${i.investor_id}|${i.type_id}|${index(i.month ?? i.date.slice(0, 7))}`, i.amount);
+    }
+
+    const all = [...due.keys(), ...got.keys()].map((k) => +k.split('|')[2]).filter((m) => m <= last);
+    if (!all.length) return { months: [], investors: [] };
+    const months = Array.from({ length: last - Math.min(...all) + 1 }, (_, i) => Math.min(...all) + i);
+
+    const typeNames = new Map((this.stats.value()?.types ?? []).map((t) => [t.id, t.name]));
+    const investors: InvestorMatrix[] = [];
+    for (const row of this.rows()) {
+      const typeIds = new Set<string>();
+      for (const key of [...due.keys(), ...got.keys()]) {
+        const [investor, typeId] = key.split('|');
+        if (investor === row.id) typeIds.add(typeId);
+      }
+      const types = [...typeIds]
+        .sort((a, b) => (typeNames.get(a) ?? '').localeCompare(typeNames.get(b) ?? ''))
+        .map((typeId) => ({
+          name: typeNames.get(typeId) ?? '-',
+          cells: months.map((m) => ({ due: due.get(`${row.id}|${typeId}|${m}`) ?? 0, got: got.get(`${row.id}|${typeId}|${m}`) ?? 0 })),
+        }));
+      // Only investors who are short in at least one month make the report.
+      if (types.some((t) => t.cells.some((c) => c.due > c.got))) investors.push({ name: row.name, types });
+    }
+    return { months, investors };
   }
 
   /** Renders the chart for print (dark text on white) so it stays readable when the app is in dark mode. */
