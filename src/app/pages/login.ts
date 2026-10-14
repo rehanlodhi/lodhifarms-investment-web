@@ -8,13 +8,13 @@ import { Auth } from '../core/auth';
   imports: [ReactiveFormsModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <main style="max-width:360px;margin:12vh auto;padding:0 16px">
-      <form class="card" [formGroup]="form" (ngSubmit)="submit()" style="display:grid;gap:1rem">
+    <main class="login-wrap">
+      <form class="card login-card" [formGroup]="form" (ngSubmit)="submit()">
         <h1>Lodhi Farms Investment</h1>
         <label>Username or email <input formControlName="username" autocomplete="username" /></label>
         <label>Password <input type="password" formControlName="password" autocomplete="current-password" /></label>
         @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
-        <button class="primary" [disabled]="form.invalid || busy()">Sign in</button>
+        <button class="primary" [class.is-loading]="busy()" [disabled]="form.invalid || busy()">{{ busy() ? 'Signing in…' : 'Sign in' }}</button>
       </form>
     </main>
   `,

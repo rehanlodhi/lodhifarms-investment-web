@@ -3,6 +3,7 @@ import { rxResource } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Api } from '../core/api';
 import { Collapsible } from '../core/collapsible';
+import { Pending } from '../core/pending';
 import { Investor } from '../core/models';
 
 @Component({
@@ -25,7 +26,7 @@ import { Investor } from '../core/models';
         </div>
       </fieldset>
       <div>
-        <button class="primary" [disabled]="form.invalid">{{ editing() ? 'Update' : 'Add investor' }}</button>
+        <button class="primary" [class.is-loading]="pending.has('save')" [disabled]="form.invalid || pending.has('save')">{{ editing() ? 'Update' : 'Add investor' }}</button>
         @if (editing()) { <button type="button" (click)="reset()">Cancel</button> }
       </div>
     </form>
@@ -53,7 +54,7 @@ import { Investor } from '../core/models';
               <td>{{ i.name }}</td><td>{{ typeNames(i) }}</td><td>{{ i.email }}</td><td>{{ i.phone }}</td>
               <td class="actions">
                 <button (click)="edit(i)">Edit</button>
-                <button class="danger" (click)="remove(i)">Delete</button>
+                <button class="danger" [class.is-loading]="pending.has('del:' + i.id)" [disabled]="pending.has('del:' + i.id)" (click)="remove(i)">Delete</button>
               </td>
             </tr>
           } @empty { <tr><td colspan="5" class="muted">No investors found.</td></tr> }
@@ -64,6 +65,7 @@ import { Investor } from '../core/models';
 })
 export class Investors {
   protected readonly formOpen = signal(false);
+  protected readonly pending = new Pending();
   protected readonly filtersOpen = signal(false);
   private readonly api = inject(Api);
   protected readonly items = rxResource({ stream: () => this.api.investors() });
@@ -96,8 +98,13 @@ export class Investors {
 
   save() {
     const v = this.form.getRawValue();
-    this.api.saveInvestor({ name: v.name, email: v.email || null, phone: v.phone || null, type_ids: this.selectedTypes() }, this.editing() ?? undefined)
-      .subscribe(() => { this.reset(); this.items.reload(); });
+    this.error.set('');
+    this.pending
+      .track('save', this.api.saveInvestor({ name: v.name, email: v.email || null, phone: v.phone || null, type_ids: this.selectedTypes() }, this.editing() ?? undefined))
+      .subscribe({
+        next: () => { this.reset(); this.items.reload(); },
+        error: (e) => this.error.set(String(e.error?.detail ?? 'Save failed')),
+      });
   }
   edit(i: Investor) {
     this.formOpen.set(true);
@@ -109,7 +116,7 @@ export class Investors {
   remove(i: Investor) {
     if (!confirm(`Delete ${i.name}?`)) return;
     this.error.set('');
-    this.api.deleteInvestor(i.id).subscribe({
+    this.pending.track('del:' + i.id, this.api.deleteInvestor(i.id)).subscribe({
       next: () => this.items.reload(),
       error: (e) => this.error.set(e.error?.detail ?? 'Delete failed'),
     });

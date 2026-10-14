@@ -4,6 +4,7 @@ import { CurrencyPipe } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Api } from '../core/api';
 import { Collapsible } from '../core/collapsible';
+import { Pending } from '../core/pending';
 import { RequestItem } from '../core/models';
 
 const thisMonth = () => new Date().toISOString().slice(0, 7);
@@ -42,7 +43,7 @@ const thisMonth = () => new Date().toISOString().slice(0, 7);
       <label>Note <input formControlName="note" /></label>
       @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
       <div>
-        <button class="primary" [disabled]="form.invalid || !selected().length">{{ editing() ? 'Update' : 'Add request' }}</button>
+        <button class="primary" [class.is-loading]="pending.has('save')" [disabled]="form.invalid || !selected().length || pending.has('save')">{{ editing() ? 'Update' : 'Add request' }}</button>
         @if (editing()) { <button type="button" (click)="reset()">Cancel</button> }
       </div>
     </form>
@@ -59,7 +60,7 @@ const thisMonth = () => new Date().toISOString().slice(0, 7);
               <td [title]="names(r)">{{ r.investor_ids.length }} · {{ names(r) }}</td>
               <td class="actions">
                 <button (click)="edit(r)">Edit</button>
-                <button class="danger" (click)="remove(r)">Delete</button>
+                <button class="danger" [class.is-loading]="pending.has('del:' + r.id)" [disabled]="pending.has('del:' + r.id)" (click)="remove(r)">Delete</button>
               </td>
             </tr>
           } @empty { <tr><td colspan="5" class="muted">No requests yet.</td></tr> }
@@ -70,6 +71,7 @@ const thisMonth = () => new Date().toISOString().slice(0, 7);
 })
 export class Requests {
   protected readonly formOpen = signal(false);
+  protected readonly pending = new Pending();
   private readonly api = inject(Api);
   protected readonly items = rxResource({ stream: () => this.api.requests() });
   protected readonly investors = rxResource({ stream: () => this.api.investors() });
@@ -103,11 +105,11 @@ export class Requests {
   save() {
     const v = this.form.getRawValue();
     this.error.set('');
-    this.api.saveRequest({
+    this.pending.track('save', this.api.saveRequest({
       type_id: v.type_id, amount: v.amount, start_month: v.start_month, recurring: v.recurring,
       end_month: v.recurring && v.end_month ? v.end_month : null,
       investor_ids: this.selected(), note: v.note || null,
-    }, this.editing() ?? undefined).subscribe({
+    }, this.editing() ?? undefined)).subscribe({
       next: () => { this.reset(); this.items.reload(); },
       error: (e) => this.error.set(JSON.stringify(e.error?.detail ?? 'Save failed')),
     });
@@ -127,6 +129,6 @@ export class Requests {
     this.form.reset({ type_id: '', amount: 0, start_month: thisMonth(), recurring: false, end_month: '', note: '' });
   }
   remove(r: RequestItem) {
-    if (confirm('Delete this request?')) this.api.deleteRequest(r.id).subscribe(() => this.items.reload());
+    if (confirm('Delete this request?')) this.pending.track('del:' + r.id, this.api.deleteRequest(r.id)).subscribe(() => this.items.reload());
   }
 }

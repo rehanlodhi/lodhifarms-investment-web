@@ -4,6 +4,7 @@ import { CurrencyPipe } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Api } from '../core/api';
 import { Collapsible } from '../core/collapsible';
+import { Pending } from '../core/pending';
 import { Investment } from '../core/models';
 
 @Component({
@@ -32,7 +33,7 @@ import { Investment } from '../core/models';
       <label>Note <input formControlName="note" /></label>
       <label>Screenshots <input #file type="file" accept="image/*" multiple (change)="files.set(file.files ? [...file.files] : [])" /></label>
       <div>
-        <button class="primary" [disabled]="form.invalid || busy()">{{ editing() ? 'Update' : 'Add investment' }}</button>
+        <button class="primary" [class.is-loading]="pending.has('save')" [disabled]="form.invalid || pending.has('save')">{{ editing() ? 'Update' : 'Add investment' }}</button>
         @if (editing()) { <button type="button" (click)="reset(file)">Cancel</button> }
       </div>
     </form>
@@ -62,7 +63,7 @@ import { Investment } from '../core/models';
           </div>
         </fieldset>
         @if (bulkMsg()) { <p class="muted" role="status">{{ bulkMsg() }}</p> }
-        <div><button class="primary" [disabled]="bulkForm.invalid || !bulkInvestors().length || busy()">Add for {{ bulkInvestors().length }} investors</button></div>
+        <div><button class="primary" [class.is-loading]="pending.has('bulkAdd')" [disabled]="bulkForm.invalid || !bulkInvestors().length || pending.has('bulkAdd')">Add for {{ bulkInvestors().length }} investors</button></div>
       </form>
     </app-collapsible>
     <app-collapsible title="Filters" [(open)]="filtersOpen">
@@ -101,7 +102,7 @@ import { Investment } from '../core/models';
           <span>{{ selectedVisible().length }} selected · {{ selectedTotal() | currency: 'PKR ' : 'symbol' : '1.0-0' }}</span>
           <span>
             <button type="button" (click)="selected.set(emptySet)">Clear selection</button>
-            <button type="button" class="danger" (click)="bulkDelete()">Delete selected</button>
+            <button type="button" class="danger" [class.is-loading]="pending.has('bulkDel')" [disabled]="pending.has('bulkDel')" (click)="bulkDelete()">Delete selected</button>
           </span>
         </div>
       }
@@ -124,7 +125,7 @@ import { Investment } from '../core/models';
               </td>
               <td class="actions">
                 <button (click)="edit(inv)">Edit</button>
-                <button class="danger" (click)="remove(inv)">Delete</button>
+                <button class="danger" [class.is-loading]="pending.has('del:' + inv.id)" [disabled]="pending.has('del:' + inv.id)" (click)="remove(inv)">Delete</button>
               </td>
             </tr>
           } @empty { <tr><td colspan="8" class="muted">No investments found.</td></tr> }
@@ -144,19 +145,20 @@ import { Investment } from '../core/models';
             <figure>
               <a [href]="'/uploads/' + s" target="_blank" rel="noopener"><img [src]="'/uploads/' + s" alt="Screenshot" /></a>
               <figcaption>
-                <label class="btn">Replace <input type="file" accept="image/*" hidden (change)="replaceShot(inv.id, s, $any($event.target))" /></label>
-                <button type="button" class="danger" (click)="deleteShot(inv.id, s)">Delete</button>
+                <label class="btn" [class.is-loading]="pending.has('shot:rep:' + s)">Replace <input type="file" accept="image/*" hidden [disabled]="pending.has('shot:rep:' + s)" (change)="replaceShot(inv.id, s, $any($event.target))" /></label>
+                <button type="button" class="danger" [class.is-loading]="pending.has('shot:del:' + s)" [disabled]="pending.has('shot:del:' + s)" (click)="deleteShot(inv.id, s)">Delete</button>
               </figcaption>
             </figure>
           } @empty { <p class="muted">No screenshots yet.</p> }
         </div>
-        <label class="btn primary add">+ Add screenshots <input type="file" accept="image/*" multiple hidden (change)="addShots(inv.id, $any($event.target))" /></label>
+        <label class="btn primary add" [class.is-loading]="pending.has('shot:add')">+ Add screenshots <input type="file" accept="image/*" multiple hidden [disabled]="pending.has('shot:add')" (change)="addShots(inv.id, $any($event.target))" /></label>
       }
     </dialog>
   `,
 })
 export class Investments {
   protected readonly formOpen = signal(false);
+  protected readonly pending = new Pending();
   protected readonly filtersOpen = signal(false);
   protected readonly bulkOpen = signal(false);
   protected readonly bulkInvestors = signal<string[]>([]);
@@ -181,7 +183,6 @@ export class Investments {
   protected readonly shotsInvestment = computed(() => (this.items.value() ?? []).find((i) => i.id === this.shotsFor()) ?? null);
   protected readonly editing = signal<string | null>(null);
   protected readonly files = signal<File[]>([]);
-  protected readonly busy = signal(false);
   protected readonly error = signal('');
   protected readonly fDate = signal('');
   protected readonly fMonth = signal('');
@@ -232,7 +233,7 @@ export class Investments {
     const ids = this.selectedVisible().map((i) => i.id);
     if (!ids.length || !confirm(`Delete ${ids.length} investment${ids.length === 1 ? '' : 's'}? This also removes their screenshots.`)) return;
     this.error.set('');
-    this.api.bulkDeleteInvestments(ids).subscribe({
+    this.pending.track('bulkDel', this.api.bulkDeleteInvestments(ids)).subscribe({
       next: () => { this.selected.set(this.emptySet); this.items.reload(); },
       error: (e) => this.error.set(String(e.error?.detail ?? 'Bulk delete failed')),
     });
@@ -244,20 +245,18 @@ export class Investments {
   bulkSelectAll() { this.bulkInvestors.set((this.investors.value() ?? []).map((i) => i.id)); }
   bulkAdd() {
     const v = this.bulkForm.getRawValue();
-    this.busy.set(true);
     this.bulkMsg.set('');
     this.error.set('');
-    this.api.bulkAddInvestments({
+    this.pending.track('bulkAdd', this.api.bulkAddInvestments({
       investor_ids: this.bulkInvestors(), type_id: v.type_id, amount: v.amount, date: v.date,
       month: v.month, note: v.note || null, skip_existing: v.skip_existing,
-    }).subscribe({
+    })).subscribe({
       next: (r) => {
-        this.busy.set(false);
         this.bulkMsg.set(`Added ${r.created}${r.skipped ? `, skipped ${r.skipped} that already existed` : ''}.`);
         this.bulkInvestors.set([]);
         this.items.reload();
       },
-      error: (e) => { this.busy.set(false); this.error.set(String(e.error?.detail ?? 'Bulk add failed')); },
+      error: (e) => this.error.set(String(e.error?.detail ?? 'Bulk add failed')),
     });
   }
 
@@ -273,15 +272,15 @@ export class Investments {
   addShots(id: string, input: HTMLInputElement) {
     const files = [...(input.files ?? [])];
     input.value = '';
-    if (files.length) this.api.addScreenshots(id, files).subscribe(this.shotDone);
+    if (files.length) this.pending.track('shot:add', this.api.addScreenshots(id, files)).subscribe(this.shotDone);
   }
   replaceShot(id: string, name: string, input: HTMLInputElement) {
     const file = input.files?.[0];
     input.value = '';
-    if (file) this.api.replaceScreenshot(id, name, file).subscribe(this.shotDone);
+    if (file) this.pending.track('shot:rep:' + name, this.api.replaceScreenshot(id, name, file)).subscribe(this.shotDone);
   }
   deleteShot(id: string, name: string) {
-    if (confirm('Delete this screenshot?')) this.api.deleteScreenshot(id, name).subscribe(this.shotDone);
+    if (confirm('Delete this screenshot?')) this.pending.track('shot:del:' + name, this.api.deleteScreenshot(id, name)).subscribe(this.shotDone);
   }
 
   clearFilters() {
@@ -299,11 +298,10 @@ export class Investments {
     fd.set('month', v.month);
     if (v.note) fd.set('note', v.note);
     this.files().forEach((f) => fd.append('screenshots', f));
-    this.busy.set(true);
     this.error.set('');
-    this.api.saveInvestment(fd, this.editing() ?? undefined).subscribe({
-      next: () => { this.busy.set(false); this.reset(); this.items.reload(); },
-      error: (e) => { this.busy.set(false); this.error.set(e.error?.detail?.toString() ?? 'Save failed'); },
+    this.pending.track('save', this.api.saveInvestment(fd, this.editing() ?? undefined)).subscribe({
+      next: () => { this.reset(); this.items.reload(); },
+      error: (e) => this.error.set(e.error?.detail?.toString() ?? 'Save failed'),
     });
   }
   edit(inv: Investment) {
@@ -319,6 +317,6 @@ export class Investments {
   }
   remove(inv: Investment) {
     if (!confirm('Delete this investment?')) return;
-    this.api.deleteInvestment(inv.id).subscribe(() => this.items.reload());
+    this.pending.track('del:' + inv.id, this.api.deleteInvestment(inv.id)).subscribe(() => this.items.reload());
   }
 }

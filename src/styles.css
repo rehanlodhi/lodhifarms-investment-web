@@ -90,3 +90,19 @@ form.row.wide fieldset .checks { flex:1 1 100%; display:grid; }
 .collapse-body[hidden] { display:none; }
 th.sel, td.sel { width:2.25rem; }
 th.sel input, td.sel input { width:auto; }
+
+/* Top loading bar (route changes and API calls). Appears only if loading lasts > 150ms. */
+.top-bar { position:fixed; inset:0 0 auto 0; height:3px; z-index:1000; overflow:hidden; background:transparent; opacity:0; animation:bar-in 0s linear .15s forwards; }
+.top-bar span { position:absolute; top:0; bottom:0; width:40%; background:var(--brand); border-radius:0 2px 2px 0; animation:bar-slide 1.1s ease-in-out infinite; }
+@keyframes bar-in { to { opacity:1; } }
+@keyframes bar-slide { from { left:-40%; } to { left:100%; } }
+@media (prefers-reduced-motion: reduce) { .top-bar span { width:100%; left:0; animation:none; } }
+
+/* Button spinner */
+button.is-loading, .btn.is-loading { pointer-events:none; opacity:.8; }
+button.is-loading::before, .btn.is-loading::before { content:''; display:inline-block; width:.85em; height:.85em; margin-right:.5em; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; vertical-align:-.1em; animation:spin .7s linear infinite; }
+
+/* Login page */
+.login-wrap { min-height:100vh; min-height:100dvh; display:grid; place-items:center; padding:16px; }
+.login-card { width:min(100%,380px); display:grid; gap:1rem; margin:0; }
+.login-card h1 { margin:0; text-align:center; }
