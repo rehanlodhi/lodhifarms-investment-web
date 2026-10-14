@@ -30,7 +30,9 @@ const PALETTE = ['#2f6b3a', '#d9a441', '#3b7dd8', '#b5533c', '#7a5cc2', '#2a9d8f
         <div class="canvas-box" [style.height.px]="height(s)"><canvas #monthCanvas role="img" aria-label="Monthly contributions stacked per investment type"></canvas></div>
       </section>
     } @else if (stats.error()) {
-      <p class="error">Failed to load stats.</p>
+      <p class="error" role="alert">Failed to load stats.</p>
+    } @else {
+      <div class="loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span> Loading dashboard…</div>
     }
   `,
 })
