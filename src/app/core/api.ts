@@ -1,10 +1,18 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Investment, InvestmentType, Investor, Stats } from './models';
+import { Investment, InvestmentType, Investor, InvestorDues, RequestForm, RequestItem, Stats } from './models';
 
 @Injectable({ providedIn: 'root' })
 export class Api {
   private readonly http = inject(HttpClient);
+
+  investorDues() { return this.http.get<InvestorDues>('/api/stats/investors'); }
+
+  requests() { return this.http.get<RequestItem[]>('/api/requests'); }
+  saveRequest(v: RequestForm, id?: string) {
+    return id ? this.http.put<RequestItem>(`/api/requests/${id}`, v) : this.http.post<RequestItem>('/api/requests', v);
+  }
+  deleteRequest(id: string) { return this.http.delete(`/api/requests/${id}`); }
 
   stats() { return this.http.get<Stats>('/api/stats'); }
 
@@ -23,6 +31,15 @@ export class Api {
   investments() { return this.http.get<Investment[]>('/api/investments'); }
   saveInvestment(form: FormData, id?: string) {
     return id ? this.http.put<Investment>(`/api/investments/${id}`, form) : this.http.post<Investment>('/api/investments', form);
+  }
+  bulkAddInvestments(body: {
+    investor_ids: string[]; type_id: string; amount: number; date: string; month: string;
+    note: string | null; skip_existing: boolean;
+  }) {
+    return this.http.post<{ created: number; skipped: number }>('/api/investments/bulk', body);
+  }
+  bulkDeleteInvestments(ids: string[]) {
+    return this.http.post<{ deleted: number }>('/api/investments/bulk-delete', { ids });
   }
   deleteInvestment(id: string) { return this.http.delete(`/api/investments/${id}`); }
   addScreenshots(id: string, files: File[]) {

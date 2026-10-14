@@ -2,64 +2,80 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { rxResource } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Api } from '../core/api';
+import { Collapsible } from '../core/collapsible';
 import { Investor } from '../core/models';
 
 @Component({
   selector: 'app-investors',
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, Collapsible],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h1>Investors</h1>
-    <div class="two-col">
-      <form class="card stack" [formGroup]="form" (ngSubmit)="save()">
-        <h2>{{ editing() ? 'Edit investor' : 'Add investor' }}</h2>
-        <label>Name <input formControlName="name" /></label>
-        <label>Email <input type="email" formControlName="email" /></label>
-        <label>Phone <input formControlName="phone" /></label>
-        <div>
-          <button class="primary" [disabled]="form.invalid">{{ editing() ? 'Update' : 'Add investor' }}</button>
-          @if (editing()) { <button type="button" (click)="reset()">Cancel</button> }
+    <app-collapsible [title]="editing() ? 'Edit investor' : 'Add investor'" [(open)]="formOpen">
+    <form class="row wide" [formGroup]="form" (ngSubmit)="save()">
+      <label>Name <input formControlName="name" /></label>
+      <label>Email <input type="email" formControlName="email" /></label>
+      <label>Phone <input formControlName="phone" /></label>
+      <fieldset>
+        <legend>Assigned types ({{ selectedTypes().length }})</legend>
+        <div class="checks">
+          @for (t of types.value() ?? []; track t.id) {
+            <label class="check"><input type="checkbox" [checked]="selectedTypes().includes(t.id)" (change)="toggleType(t.id)" /> {{ t.name }}</label>
+          }
         </div>
-      </form>
-      <section>
-        @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
-        <div class="card">
-          <div class="toolbar">
-            <h2>Filters</h2>
-            <span class="muted">{{ filtered().length }} of {{ items.value()?.length ?? 0 }}</span>
-            <button type="button" (click)="clearFilters()">Clear filters</button>
-          </div>
-          <div class="filter-grid" style="--cols:2">
-            <label>Name <input placeholder="Contains…" [value]="fName()" (input)="fName.set($any($event.target).value)" /></label>
-            <label>Email <input placeholder="Contains…" [value]="fEmail()" (input)="fEmail.set($any($event.target).value)" /></label>
-            <label>Phone <input placeholder="Contains…" [value]="fPhone()" (input)="fPhone.set($any($event.target).value)" /></label>
-          </div>
-        </div>
-        <div class="card table-wrap">
-          <table>
-            <thead>
-              <tr><th>Name</th><th>Email</th><th>Phone</th><th></th></tr>
-            </thead>
-            <tbody>
-              @for (i of filtered(); track i.id) {
-                <tr>
-                  <td>{{ i.name }}</td><td>{{ i.email }}</td><td>{{ i.phone }}</td>
-                  <td class="actions">
-                    <button (click)="edit(i)">Edit</button>
-                    <button class="danger" (click)="remove(i)">Delete</button>
-                  </td>
-                </tr>
-              } @empty { <tr><td colspan="4" class="muted">No investors found.</td></tr> }
-            </tbody>
-          </table>
-        </div>
-      </section>
+      </fieldset>
+      <div>
+        <button class="primary" [disabled]="form.invalid">{{ editing() ? 'Update' : 'Add investor' }}</button>
+        @if (editing()) { <button type="button" (click)="reset()">Cancel</button> }
+      </div>
+    </form>
+    </app-collapsible>
+    @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+    <app-collapsible title="Filters" [(open)]="filtersOpen">
+      <div class="toolbar">
+        <span class="muted">{{ filtered().length }} of {{ items.value()?.length ?? 0 }}</span>
+        <button type="button" (click)="clearFilters()">Clear filters</button>
+      </div>
+      <div class="filter-grid">
+        <label>Name <input placeholder="Contains…" [value]="fName()" (input)="fName.set($any($event.target).value)" /></label>
+        <label>Email <input placeholder="Contains…" [value]="fEmail()" (input)="fEmail.set($any($event.target).value)" /></label>
+        <label>Phone <input placeholder="Contains…" [value]="fPhone()" (input)="fPhone.set($any($event.target).value)" /></label>
+      </div>
+    </app-collapsible>
+    <div class="card table-wrap">
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Types</th><th>Email</th><th>Phone</th><th></th></tr>
+        </thead>
+        <tbody>
+          @for (i of filtered(); track i.id) {
+            <tr>
+              <td>{{ i.name }}</td><td>{{ typeNames(i) }}</td><td>{{ i.email }}</td><td>{{ i.phone }}</td>
+              <td class="actions">
+                <button (click)="edit(i)">Edit</button>
+                <button class="danger" (click)="remove(i)">Delete</button>
+              </td>
+            </tr>
+          } @empty { <tr><td colspan="5" class="muted">No investors found.</td></tr> }
+        </tbody>
+      </table>
     </div>
   `,
 })
 export class Investors {
+  protected readonly formOpen = signal(false);
+  protected readonly filtersOpen = signal(false);
   private readonly api = inject(Api);
   protected readonly items = rxResource({ stream: () => this.api.investors() });
+  protected readonly types = rxResource({ stream: () => this.api.types() });
+  protected readonly selectedTypes = signal<string[]>([]);
+  private readonly typeById = computed(() => new Map((this.types.value() ?? []).map((t) => [t.id, t.name])));
+  protected typeNames(i: Investor) {
+    return (i.type_ids ?? []).map((id) => this.typeById().get(id)).filter(Boolean).join(', ');
+  }
+  protected toggleType(id: string) {
+    this.selectedTypes.update((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  }
   protected readonly editing = signal<string | null>(null);
   protected readonly error = signal('');
   protected readonly fName = signal('');
@@ -80,14 +96,16 @@ export class Investors {
 
   save() {
     const v = this.form.getRawValue();
-    this.api.saveInvestor({ name: v.name, email: v.email || null, phone: v.phone || null }, this.editing() ?? undefined)
+    this.api.saveInvestor({ name: v.name, email: v.email || null, phone: v.phone || null, type_ids: this.selectedTypes() }, this.editing() ?? undefined)
       .subscribe(() => { this.reset(); this.items.reload(); });
   }
   edit(i: Investor) {
+    this.formOpen.set(true);
     this.editing.set(i.id);
+    this.selectedTypes.set([...(i.type_ids ?? [])]);
     this.form.setValue({ name: i.name, email: i.email ?? '', phone: i.phone ?? '' });
   }
-  reset() { this.editing.set(null); this.form.reset(); }
+  reset() { this.editing.set(null); this.selectedTypes.set([]); this.form.reset(); }
   remove(i: Investor) {
     if (!confirm(`Delete ${i.name}?`)) return;
     this.error.set('');

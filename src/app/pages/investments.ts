@@ -3,99 +3,133 @@ import { rxResource } from '@angular/core/rxjs-interop';
 import { CurrencyPipe } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Api } from '../core/api';
+import { Collapsible } from '../core/collapsible';
 import { Investment } from '../core/models';
 
 @Component({
   selector: 'app-investments',
-  imports: [ReactiveFormsModule, CurrencyPipe],
+  imports: [ReactiveFormsModule, CurrencyPipe, Collapsible],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h1>Investments</h1>
-    <div class="two-col">
-      <form class="card stack" [formGroup]="form" (ngSubmit)="save()">
-        <h2>{{ editing() ? 'Edit investment' : 'Add investment' }}</h2>
-        <label>Investor
-          <select formControlName="investor_id">
-            <option value="" disabled>Select…</option>
-            @for (i of investors.value() ?? []; track i.id) { <option [value]="i.id">{{ i.name }}</option> }
-          </select>
-        </label>
+    <app-collapsible [title]="editing() ? 'Edit investment' : 'Add investment'" [(open)]="formOpen">
+    <form class="row wide" [formGroup]="form" (ngSubmit)="save()">
+      <label>Investor
+        <select formControlName="investor_id">
+          <option value="" disabled>Select…</option>
+          @for (i of investors.value() ?? []; track i.id) { <option [value]="i.id">{{ i.name }}</option> }
+        </select>
+      </label>
+      <label>Type
+        <select formControlName="type_id">
+          <option value="" disabled>Select…</option>
+          @for (t of types.value() ?? []; track t.id) { <option [value]="t.id">{{ t.name }}</option> }
+        </select>
+      </label>
+      <label>Amount <input type="number" min="1" formControlName="amount" /></label>
+      <label>Date <input type="date" formControlName="date" /></label>
+      <label>Month <input type="month" formControlName="month" /></label>
+      <label>Note <input formControlName="note" /></label>
+      <label>Screenshots <input #file type="file" accept="image/*" multiple (change)="files.set(file.files ? [...file.files] : [])" /></label>
+      <div>
+        <button class="primary" [disabled]="form.invalid || busy()">{{ editing() ? 'Update' : 'Add investment' }}</button>
+        @if (editing()) { <button type="button" (click)="reset(file)">Cancel</button> }
+      </div>
+    </form>
+    </app-collapsible>
+    @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+    <app-collapsible title="Bulk add (one investment per selected investor)" [(open)]="bulkOpen">
+      <form class="row wide" [formGroup]="bulkForm" (ngSubmit)="bulkAdd()">
         <label>Type
           <select formControlName="type_id">
             <option value="" disabled>Select…</option>
             @for (t of types.value() ?? []; track t.id) { <option [value]="t.id">{{ t.name }}</option> }
           </select>
         </label>
-        <label>Amount <input type="number" min="1" formControlName="amount" /></label>
+        <label>Amount each <input type="number" min="1" formControlName="amount" /></label>
         <label>Date <input type="date" formControlName="date" /></label>
         <label>Month <input type="month" formControlName="month" /></label>
         <label>Note <input formControlName="note" /></label>
-        <label>Screenshots <input #file type="file" accept="image/*" multiple (change)="files.set(file.files ? [...file.files] : [])" /></label>
-        <div>
-          <button class="primary" [disabled]="form.invalid || busy()">{{ editing() ? 'Update' : 'Add investment' }}</button>
-          @if (editing()) { <button type="button" (click)="reset(file)">Cancel</button> }
-        </div>
+        <label class="check"><input type="checkbox" formControlName="skip_existing" /> Skip investors who already have this type, month and amount</label>
+        <fieldset>
+          <legend>Investors ({{ bulkInvestors().length }})</legend>
+          <button type="button" (click)="bulkSelectAll()">All</button>
+          <button type="button" (click)="bulkInvestors.set([])">None</button>
+          <div class="checks">
+            @for (i of investors.value() ?? []; track i.id) {
+              <label class="check"><input type="checkbox" [checked]="bulkInvestors().includes(i.id)" (change)="toggleBulkInvestor(i.id)" /> {{ i.name }}</label>
+            }
+          </div>
+        </fieldset>
+        @if (bulkMsg()) { <p class="muted" role="status">{{ bulkMsg() }}</p> }
+        <div><button class="primary" [disabled]="bulkForm.invalid || !bulkInvestors().length || busy()">Add for {{ bulkInvestors().length }} investors</button></div>
       </form>
-      <section>
-        @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
-        <div class="card">
-          <div class="toolbar">
-            <h2>Filters</h2>
-            <span class="muted">{{ filtered().length }} of {{ items.value()?.length ?? 0 }} · Total {{ total() | currency: 'PKR ' : 'symbol' : '1.0-0' }}</span>
-            <button type="button" (click)="clearFilters()">Clear filters</button>
-          </div>
-          <div class="filter-grid">
-            <label>Investor
-              <select [value]="fInvestor()" (change)="fInvestor.set($any($event.target).value)">
-                <option value="">All</option>
-                @for (i of investors.value() ?? []; track i.id) { <option [value]="i.id">{{ i.name }}</option> }
-              </select>
-            </label>
-            <label>Type
-              <select [value]="fType()" (change)="fType.set($any($event.target).value)">
-                <option value="">All</option>
-                @for (t of types.value() ?? []; track t.id) { <option [value]="t.id">{{ t.name }}</option> }
-              </select>
-            </label>
-            <label>Month <input type="month" [value]="fMonth()" (input)="fMonth.set($any($event.target).value)" /></label>
-            <label>Date contains <input placeholder="e.g. 2026-06" [value]="fDate()" (input)="fDate.set($any($event.target).value)" /></label>
-            <label>Minimum amount <input type="number" min="0" placeholder="0" [value]="fMin()" (input)="fMin.set($any($event.target).value)" /></label>
-            <label>Screenshots
-              <select [value]="fShots()" (change)="fShots.set($any($event.target).value)">
-                <option value="">All</option>
-                <option value="yes">With</option>
-                <option value="no">Without</option>
-              </select>
-            </label>
-          </div>
+    </app-collapsible>
+    <app-collapsible title="Filters" [(open)]="filtersOpen">
+      <div class="toolbar">
+        <span class="muted">{{ filtered().length }} of {{ items.value()?.length ?? 0 }} · Total {{ total() | currency: 'PKR ' : 'symbol' : '1.0-0' }}</span>
+        <button type="button" (click)="clearFilters()">Clear filters</button>
+      </div>
+      <div class="filter-grid">
+        <label>Investor
+          <select [value]="fInvestor()" (change)="fInvestor.set($any($event.target).value)">
+            <option value="">All</option>
+            @for (i of investors.value() ?? []; track i.id) { <option [value]="i.id">{{ i.name }}</option> }
+          </select>
+        </label>
+        <label>Type
+          <select [value]="fType()" (change)="fType.set($any($event.target).value)">
+            <option value="">All</option>
+            @for (t of types.value() ?? []; track t.id) { <option [value]="t.id">{{ t.name }}</option> }
+          </select>
+        </label>
+        <label>Month <input type="month" [value]="fMonth()" (input)="fMonth.set($any($event.target).value)" /></label>
+        <label>Date contains <input placeholder="e.g. 2026-06" [value]="fDate()" (input)="fDate.set($any($event.target).value)" /></label>
+        <label>Minimum amount <input type="number" min="0" placeholder="0" [value]="fMin()" (input)="fMin.set($any($event.target).value)" /></label>
+        <label>Screenshots
+          <select [value]="fShots()" (change)="fShots.set($any($event.target).value)">
+            <option value="">All</option>
+            <option value="yes">With</option>
+            <option value="no">Without</option>
+          </select>
+        </label>
+      </div>
+    </app-collapsible>
+    <div class="card table-wrap">
+      @if (selectedVisible().length) {
+        <div class="toolbar">
+          <span>{{ selectedVisible().length }} selected · {{ selectedTotal() | currency: 'PKR ' : 'symbol' : '1.0-0' }}</span>
+          <span>
+            <button type="button" (click)="selected.set(emptySet)">Clear selection</button>
+            <button type="button" class="danger" (click)="bulkDelete()">Delete selected</button>
+          </span>
         </div>
-        <div class="card table-wrap">
-          <table>
-            <thead>
-              <tr><th>Date</th><th>Month</th><th>Investor</th><th>Type</th><th>Amount</th><th>Screenshots</th><th></th></tr>
-            </thead>
-            <tbody>
-              @for (inv of filtered(); track inv.id) {
-                <tr>
-                  <td>{{ inv.date }}</td><td>{{ inv.month ?? inv.date.slice(0, 7) }}</td><td>{{ inv.investor_name }}</td><td>{{ inv.type_name }}</td>
-                  <td>{{ inv.amount | currency: 'PKR ' : 'symbol' : '1.0-0' }}</td>
-                  <td>
-                    <button type="button" class="thumbs" (click)="openShots(inv.id)" [attr.aria-label]="'View screenshots (' + inv.screenshots.length + ')'">
-                      @for (s of inv.screenshots.slice(0, 3); track s) { <img [src]="'/uploads/' + s" alt="" /> }
-                      @if (!inv.screenshots.length) { <span class="muted">Add</span> }
-                      @else if (inv.screenshots.length > 3) { <span class="muted">+{{ inv.screenshots.length - 3 }}</span> }
-                    </button>
-                  </td>
-                  <td class="actions">
-                    <button (click)="edit(inv)">Edit</button>
-                    <button class="danger" (click)="remove(inv)">Delete</button>
-                  </td>
-                </tr>
-              } @empty { <tr><td colspan="7" class="muted">No investments found.</td></tr> }
-            </tbody>
-          </table>
-        </div>
-      </section>
+      }
+      <table>
+        <thead>
+          <tr><th class="sel"><input type="checkbox" aria-label="Select all shown investments" [checked]="allSelected()" (change)="toggleAll($any($event.target).checked)" /></th><th>Date</th><th>Month</th><th>Investor</th><th>Type</th><th>Amount</th><th>Screenshots</th><th></th></tr>
+        </thead>
+        <tbody>
+          @for (inv of filtered(); track inv.id) {
+            <tr>
+              <td class="sel"><input type="checkbox" [attr.aria-label]="'Select investment of ' + inv.investor_name + ', ' + inv.type_name + ', ' + inv.date" [checked]="selected().has(inv.id)" (change)="toggleRow(inv.id)" /></td>
+              <td>{{ inv.date }}</td><td>{{ inv.month ?? inv.date.slice(0, 7) }}</td><td>{{ inv.investor_name }}</td><td>{{ inv.type_name }}</td>
+              <td>{{ inv.amount | currency: 'PKR ' : 'symbol' : '1.0-0' }}</td>
+              <td>
+                <button type="button" class="thumbs" (click)="openShots(inv.id)" [attr.aria-label]="'View screenshots (' + inv.screenshots.length + ')'">
+                  @for (s of inv.screenshots.slice(0, 3); track s) { <img [src]="'/uploads/' + s" alt="" /> }
+                  @if (!inv.screenshots.length) { <span class="muted">Add</span> }
+                  @else if (inv.screenshots.length > 3) { <span class="muted">+{{ inv.screenshots.length - 3 }}</span> }
+                </button>
+              </td>
+              <td class="actions">
+                <button (click)="edit(inv)">Edit</button>
+                <button class="danger" (click)="remove(inv)">Delete</button>
+              </td>
+            </tr>
+          } @empty { <tr><td colspan="8" class="muted">No investments found.</td></tr> }
+        </tbody>
+      </table>
     </div>
 
     <dialog #dlg class="shots-dialog" (close)="shotsFor.set(null)" (click)="$event.target === dlg && dlg.close()">
@@ -122,6 +156,21 @@ import { Investment } from '../core/models';
   `,
 })
 export class Investments {
+  protected readonly formOpen = signal(false);
+  protected readonly filtersOpen = signal(false);
+  protected readonly bulkOpen = signal(false);
+  protected readonly bulkInvestors = signal<string[]>([]);
+  protected readonly bulkMsg = signal('');
+  protected readonly bulkForm = inject(FormBuilder).nonNullable.group({
+    type_id: ['', Validators.required],
+    amount: [0, [Validators.required, Validators.min(1)]],
+    date: [new Date().toISOString().slice(0, 10), Validators.required],
+    month: [new Date().toISOString().slice(0, 7), Validators.required],
+    note: [''],
+    skip_existing: [true],
+  });
+  protected readonly emptySet: ReadonlySet<string> = new Set();
+  protected readonly selected = signal<ReadonlySet<string>>(this.emptySet);
   private readonly api = inject(Api);
   protected readonly items = rxResource({ stream: () => this.api.investments() });
   protected readonly investors = rxResource({ stream: () => this.api.investors() });
@@ -163,6 +212,54 @@ export class Investments {
     );
   });
   protected readonly total = computed(() => this.filtered().reduce((sum, i) => sum + i.amount, 0));
+
+  // Only rows currently shown count as selected, so a filter can never hide rows that get deleted.
+  protected readonly selectedVisible = computed(() => this.filtered().filter((i) => this.selected().has(i.id)));
+  protected readonly selectedTotal = computed(() => this.selectedVisible().reduce((sum, i) => sum + i.amount, 0));
+  protected readonly allSelected = computed(() => this.filtered().length > 0 && this.selectedVisible().length === this.filtered().length);
+
+  toggleRow(id: string) {
+    this.selected.update((s) => {
+      const next = new Set(s);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
+  toggleAll(checked: boolean) {
+    this.selected.set(checked ? new Set(this.filtered().map((i) => i.id)) : this.emptySet);
+  }
+  bulkDelete() {
+    const ids = this.selectedVisible().map((i) => i.id);
+    if (!ids.length || !confirm(`Delete ${ids.length} investment${ids.length === 1 ? '' : 's'}? This also removes their screenshots.`)) return;
+    this.error.set('');
+    this.api.bulkDeleteInvestments(ids).subscribe({
+      next: () => { this.selected.set(this.emptySet); this.items.reload(); },
+      error: (e) => this.error.set(String(e.error?.detail ?? 'Bulk delete failed')),
+    });
+  }
+
+  toggleBulkInvestor(id: string) {
+    this.bulkInvestors.update((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  }
+  bulkSelectAll() { this.bulkInvestors.set((this.investors.value() ?? []).map((i) => i.id)); }
+  bulkAdd() {
+    const v = this.bulkForm.getRawValue();
+    this.busy.set(true);
+    this.bulkMsg.set('');
+    this.error.set('');
+    this.api.bulkAddInvestments({
+      investor_ids: this.bulkInvestors(), type_id: v.type_id, amount: v.amount, date: v.date,
+      month: v.month, note: v.note || null, skip_existing: v.skip_existing,
+    }).subscribe({
+      next: (r) => {
+        this.busy.set(false);
+        this.bulkMsg.set(`Added ${r.created}${r.skipped ? `, skipped ${r.skipped} that already existed` : ''}.`);
+        this.bulkInvestors.set([]);
+        this.items.reload();
+      },
+      error: (e) => { this.busy.set(false); this.error.set(String(e.error?.detail ?? 'Bulk add failed')); },
+    });
+  }
 
   openShots(id: string) {
     this.shotError.set('');
@@ -210,6 +307,7 @@ export class Investments {
     });
   }
   edit(inv: Investment) {
+    this.formOpen.set(true);
     this.editing.set(inv.id);
     this.form.setValue({ investor_id: inv.investor_id, type_id: inv.type_id, amount: inv.amount, date: inv.date, month: inv.month ?? inv.date.slice(0, 7), note: inv.note ?? '' });
   }

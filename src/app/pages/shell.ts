@@ -19,6 +19,7 @@ import { Auth } from '../core/auth';
       <nav aria-label="Main">
         <a routerLink="/dashboard" routerLinkActive="active">Dashboard</a>
         <a routerLink="/investments" routerLinkActive="active">Investments</a>
+        <a routerLink="/requests" routerLinkActive="active">Requests</a>
         <a routerLink="/investors" routerLinkActive="active">Investors</a>
         <a routerLink="/types" routerLinkActive="active">Types</a>
       </nav>
